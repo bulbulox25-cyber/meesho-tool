@@ -8,7 +8,9 @@ const fs = require('fs');
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static('.')); // Serve all files from root
+
+// Serve static files from 'optimized' folder
+app.use('/optimized', express.static(path.join(__dirname, 'optimized')));
 
 const upload = multer({ dest: 'uploads/' });
 
@@ -21,7 +23,7 @@ app.post('/optimize', upload.single('image'), async (req, res) => {
   try {
     const file = req.file;
     const timestamp = Date.now();
-    const optimizedFilename = `optimized-${timestamp}-${file.originalname}`;
+    const optimizedFilename = `optimized-${timestamp}.jpg`;
     const optimizedPath = path.join(__dirname, 'optimized', optimizedFilename);
     
     // Optimize image
@@ -47,6 +49,9 @@ app.post('/optimize', upload.single('image'), async (req, res) => {
     // Clean up original upload
     fs.unlinkSync(file.path);
     
+    // Return direct download URL
+    const downloadUrl = `/optimized/${optimizedFilename}`;
+    
     res.json({
       success: true,
       weight: `${estimatedWeight}g`,
@@ -54,8 +59,7 @@ app.post('/optimize', upload.single('image'), async (req, res) => {
       shipping_rate: `₹${finalRate}`,
       original_rate: "₹85-100",
       savings: `Saved ₹${85 - finalRate}`,
-      // Return the file path for download
-      download_url: `/download/${optimizedFilename}`,
+      download_url: downloadUrl,
       meesho_copy_text: `Weight: ${estimatedWeight}g | Size: ${dimensions.length}x${dimensions.width}x${dimensions.height}cm | Shipping: ₹${finalRate}`
     });
   } catch (error) {
@@ -63,28 +67,7 @@ app.post('/optimize', upload.single('image'), async (req, res) => {
   }
 });
 
-// 2. Download route (FIXED)
-app.get('/download/:filename', (req, res) => {
-  const filename = req.params.filename;
-  const filePath = path.join(__dirname, 'optimized', filename);
-  
-  console.log('Download request for:', filename);
-  console.log('File exists:', fs.existsSync(filePath));
-  
-  if (fs.existsSync(filePath)) {
-    res.download(filePath, (err) => {
-      if (err) {
-        console.error('Download error:', err);
-        res.status(500).send('Download failed');
-      }
-    });
-  } else {
-    console.log('File not found at:', filePath);
-    res.status(404).send('File not available');
-  }
-});
-
-// 3. Homepage
+// 2. Homepage
 app.get('/', (req, res) => {
   res.send(`
 <!DOCTYPE html>
@@ -161,7 +144,7 @@ app.get('/', (req, res) => {
                     document.getElementById('copyText').textContent = data.meesho_copy_text;
                     document.getElementById('result').style.display = 'block';
                     
-                    // Store download URL for button
+                    // Store download URL
                     window.downloadUrl = data.download_url;
                 }
             } catch(err) {
@@ -171,13 +154,8 @@ app.get('/', (req, res) => {
         
         function downloadImage() {
             if(window.downloadUrl) {
-                // Create a link and click it
-                const link = document.createElement('a');
-                link.href = window.downloadUrl;
-                link.download = 'optimized-product.jpg';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
+                // Open in new tab for download
+                window.open(window.downloadUrl, '_blank');
             } else {
                 alert('Please upload an image first!');
             }
