@@ -8,25 +8,32 @@ const fs = require('fs');
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.static('.')); // Serve all files from root
 
 const upload = multer({ dest: 'uploads/' });
 
-// 1. Image Optimization + Weight Estimation
+// Create directories
+if (!fs.existsSync('uploads')) fs.mkdirSync('uploads', { recursive: true });
+if (!fs.existsSync('optimized')) fs.mkdirSync('optimized', { recursive: true });
+
+// 1. Optimize + Download
 app.post('/optimize', upload.single('image'), async (req, res) => {
   try {
     const file = req.file;
+    const timestamp = Date.now();
+    const optimizedFilename = `optimized-${timestamp}-${file.originalname}`;
+    const optimizedPath = path.join(__dirname, 'optimized', optimizedFilename);
     
-    // Optimize image (compress + resize)
-    const optimizedPath = `optimized/${Date.now()}-${file.originalname}`;
+    // Optimize image
     await sharp(file.path)
-      .resize(800, 800, { fit: 'inside' })  // Max 800x800
-      .jpeg({ quality: 80 })  // 80% quality
+      .resize(800, 800, { fit: 'inside' })
+      .jpeg({ quality: 80 })
       .toFile(optimizedPath);
     
     // Get metadata
     const metadata = await sharp(optimizedPath).metadata();
     
-    // Calculate weight based on dimensions
+    // Calculate weight & shipping rate
     const estimatedWeight = Math.round((metadata.width * metadata.height) / 20000);
     const dimensions = {
       length: Math.round(metadata.width / 10),
@@ -34,43 +41,50 @@ app.post('/optimize', upload.single('image'), async (req, res) => {
       height: 5
     };
     
-    // Shipping rate optimization (50-55₹ target)
     const baseRate = 52;
-    const weightFactor = Math.max(50, estimatedWeight);
-    const finalRate = Math.min(55, Math.round(baseRate + (weightFactor - 100) * 0.1));
+    const finalRate = Math.min(55, Math.round(baseRate + (estimatedWeight - 100) * 0.1));
     
-    // Download data
-    const downloadData = {
-      optimized_image: optimizedPath,
+    // Clean up original upload
+    fs.unlinkSync(file.path);
+    
+    res.json({
+      success: true,
       weight: `${estimatedWeight}g`,
       dimensions: dimensions,
       shipping_rate: `₹${finalRate}`,
       original_rate: "₹85-100",
       savings: `Saved ₹${85 - finalRate}`,
+      // Return the file path for download
+      download_url: `/download/${optimizedFilename}`,
       meesho_copy_text: `Weight: ${estimatedWeight}g | Size: ${dimensions.length}x${dimensions.width}x${dimensions.height}cm | Shipping: ₹${finalRate}`
-    };
-    
-    res.json({
-      success: true,
-      ...downloadData,
-      image_url: `/optimized/${path.basename(optimizedPath)}`
     });
   } catch (error) {
     res.json({ success: false, error: error.message });
   }
 });
 
-// 2. Download optimized image
+// 2. Download route (FIXED)
 app.get('/download/:filename', (req, res) => {
-  const filePath = path.join(__dirname, 'optimized', req.params.filename);
+  const filename = req.params.filename;
+  const filePath = path.join(__dirname, 'optimized', filename);
+  
+  console.log('Download request for:', filename);
+  console.log('File exists:', fs.existsSync(filePath));
+  
   if (fs.existsSync(filePath)) {
-    res.download(filePath);
+    res.download(filePath, (err) => {
+      if (err) {
+        console.error('Download error:', err);
+        res.status(500).send('Download failed');
+      }
+    });
   } else {
-    res.status(404).send('File not found');
+    console.log('File not found at:', filePath);
+    res.status(404).send('File not available');
   }
 });
 
-// 3. Homepage with download button
+// 3. Homepage
 app.get('/', (req, res) => {
   res.send(`
 <!DOCTYPE html>
@@ -138,7 +152,7 @@ app.get('/', (req, res) => {
                 const data = await res.json();
                 
                 if(data.success) {
-                    document.getElementById('preview').src = data.image_url;
+                    document.getElementById('preview').src = data.download_url;
                     document.getElementById('preview').style.display = 'block';
                     document.getElementById('optSize').textContent = data.weight + ' (optimized)';
                     document.getElementById('weight').textContent = data.weight;
@@ -147,8 +161,8 @@ app.get('/', (req, res) => {
                     document.getElementById('copyText').textContent = data.meesho_copy_text;
                     document.getElementById('result').style.display = 'block';
                     
-                    // Store data for download
-                    window.downloadData = data;
+                    // Store download URL for button
+                    window.downloadUrl = data.download_url;
                 }
             } catch(err) {
                 alert('Error: ' + err);
@@ -156,11 +170,16 @@ app.get('/', (req, res) => {
         });
         
         function downloadImage() {
-            if(window.downloadData) {
+            if(window.downloadUrl) {
+                // Create a link and click it
                 const link = document.createElement('a');
-                link.href = window.downloadData.image_url;
+                link.href = window.downloadUrl;
                 link.download = 'optimized-product.jpg';
+                document.body.appendChild(link);
                 link.click();
+                document.body.removeChild(link);
+            } else {
+                alert('Please upload an image first!');
             }
         }
         
@@ -174,10 +193,6 @@ app.get('/', (req, res) => {
 </html>
   `);
 });
-
-// Create directories if not exist
-if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
-if (!fs.existsSync('optimized')) fs.mkdirSync('optimized');
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
