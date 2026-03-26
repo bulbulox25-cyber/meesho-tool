@@ -9,7 +9,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Serve static files from 'optimized' folder
+// Serve optimized images
 app.use('/optimized', express.static(path.join(__dirname, 'optimized')));
 
 const upload = multer({ dest: 'uploads/' });
@@ -18,7 +18,7 @@ const upload = multer({ dest: 'uploads/' });
 if (!fs.existsSync('uploads')) fs.mkdirSync('uploads', { recursive: true });
 if (!fs.existsSync('optimized')) fs.mkdirSync('optimized', { recursive: true });
 
-// 1. Optimize + Download
+// 1. Optimize + Fixed Rate Logic
 app.post('/optimize', upload.single('image'), async (req, res) => {
   try {
     const file = req.file;
@@ -35,32 +35,35 @@ app.post('/optimize', upload.single('image'), async (req, res) => {
     // Get metadata
     const metadata = await sharp(optimizedPath).metadata();
     
-    // Calculate weight & shipping rate
-    const estimatedWeight = Math.round((metadata.width * metadata.height) / 20000);
+    // ✅ FIXED: Weight calculation (simplified)
+    const estimatedWeight = Math.round((metadata.width * metadata.height) / 50000);
     const dimensions = {
-      length: Math.round(metadata.width / 10),
-      width: Math.round(metadata.height / 10),
+      length: 15,  // Fixed size for Meesho
+      width: 10,
       height: 5
     };
     
-    const baseRate = 52;
-    const finalRate = Math.min(55, Math.round(baseRate + (estimatedWeight - 100) * 0.1));
+    // ✅ FIXED: Rate calculation (50-55₹ target)
+    // Base rate 50₹ + small weight adjustment
+    const baseRate = 50;
+    const weightFactor = Math.min(5, Math.round(estimatedWeight / 100));
+    const finalRate = baseRate + weightFactor; // 50 to 55
+    const finalRateFixed = Math.min(55, Math.max(50, finalRate));
     
-    // Clean up original upload
+    // Clean up
     fs.unlinkSync(file.path);
     
-    // Return direct download URL
     const downloadUrl = `/optimized/${optimizedFilename}`;
     
     res.json({
       success: true,
       weight: `${estimatedWeight}g`,
       dimensions: dimensions,
-      shipping_rate: `₹${finalRate}`,
+      shipping_rate: `₹${finalRateFixed}`,  // 50-55₹
       original_rate: "₹85-100",
-      savings: `Saved ₹${85 - finalRate}`,
+      savings: `Saved ₹${85 - finalRateFixed}`,
       download_url: downloadUrl,
-      meesho_copy_text: `Weight: ${estimatedWeight}g | Size: ${dimensions.length}x${dimensions.width}x${dimensions.height}cm | Shipping: ₹${finalRate}`
+      meesho_copy_text: `Weight: ${estimatedWeight}g | Size: ${dimensions.length}x${dimensions.width}x${dimensions.height}cm | Shipping: ₹${finalRateFixed}`
     });
   } catch (error) {
     res.json({ success: false, error: error.message });
@@ -144,7 +147,6 @@ app.get('/', (req, res) => {
                     document.getElementById('copyText').textContent = data.meesho_copy_text;
                     document.getElementById('result').style.display = 'block';
                     
-                    // Store download URL
                     window.downloadUrl = data.download_url;
                 }
             } catch(err) {
@@ -154,7 +156,6 @@ app.get('/', (req, res) => {
         
         function downloadImage() {
             if(window.downloadUrl) {
-                // Open in new tab for download
                 window.open(window.downloadUrl, '_blank');
             } else {
                 alert('Please upload an image first!');
